@@ -58,7 +58,64 @@
     const inputRMSE=Math.sqrt(a/rows.length), outputRMSE=Math.sqrt(b/rows.length);
     return { inputRMSE, outputRMSE, improvementDb:20*Math.log10(Math.max(inputRMSE,1e-12)/Math.max(outputRMSE,1e-12)) };
   }
-  const api = {randomGenerator,gaussianGenerator,generate,sineFit,metrics};
+  // In-place radix-2 FFT, forward transform using exp(-j*2*pi*k*n/N).
+  function fft(real, imag) {
+    const n=real.length;
+    if(n!==imag.length || n<2 || (n&(n-1))) throw Error('FFT size must be power-of-two.');
+    for(let i=1,j=0;i<n;i++){
+      let bit=n>>1;
+      for(;j&bit;bit>>=1)j^=bit;
+      j^=bit;
+      if(i<j){[real[i],real[j]]=[real[j],real[i]];[imag[i],imag[j]]=[imag[j],imag[i]];}
+    }
+    for(let size=2;size<=n;size*=2){
+      const half=size/2, ang=-2*Math.PI/size,wr=Math.cos(ang),wi=Math.sin(ang);
+      for(let start=0;start<n;start+=size){
+        let ar=1,ai=0;
+        for(let k=0;k<half;k++){
+          const a=start+k,b=a+half,br=real[b]*ar-imag[b]*ai,bi=real[b]*ai+imag[b]*ar;
+          const xr=real[a],xi=imag[a];real[a]=xr+br;imag[a]=xi+bi;real[b]=xr-br;imag[b]=xi-bi;
+          const nr=ar*wr-ai*wi;ai=ar*wi+ai*wr;ar=nr;
+        }
+      }
+    }
+  }
+  // Periodogram averaging with a Hann window and 50% overlap. The complex
+  // H1 estimate H = sum(Y*conj(X))/sum(X*conj(X)) is more robust than |Y|/|X|.
+  function prbsFrequencyResponse(inputs,outputs,fs,desiredFrequencies,fftSize=4096){
+    if(inputs.length!==outputs.length || inputs.length<fftSize)throw Error('Not enough PRBS samples.');
+    const half=fftSize>>1, step=half;
+    const sxx=new Float64Array(half+1),syr=new Float64Array(half+1),syi=new Float64Array(half+1);
+    const window=Float64Array.from({length:fftSize},(_,i)=>0.5-0.5*Math.cos(2*Math.PI*i/(fftSize-1)));
+    let segments=0;
+    for(let start=0;start+fftSize<=inputs.length;start+=step){
+      const xr=new Float64Array(fftSize),xi=new Float64Array(fftSize);
+      const yr=new Float64Array(fftSize),yi=new Float64Array(fftSize);
+      let xm=0,ym=0;
+      for(let j=0;j<fftSize;j++){xm+=inputs[start+j];ym+=outputs[start+j];}
+      xm/=fftSize;ym/=fftSize;
+      for(let j=0;j<fftSize;j++){
+        xr[j]=(inputs[start+j]-xm)*window[j];yr[j]=(outputs[start+j]-ym)*window[j];
+      }
+      fft(xr,xi);fft(yr,yi);
+      for(let k=1;k<=half;k++){
+        sxx[k]+=xr[k]*xr[k]+xi[k]*xi[k];
+        syr[k]+=yr[k]*xr[k]+yi[k]*xi[k];
+        syi[k]+=yi[k]*xr[k]-yr[k]*xi[k];
+      }
+      segments++;
+    }
+    const points=desiredFrequencies.map(f=>{
+      const bin=Math.max(1,Math.min(half-1,Math.round(f*fftSize/fs)));
+      const denom=sxx[bin];
+      if(denom<=1e-20)throw Error('Insufficient PRBS energy near '+f.toFixed(2)+' Hz.');
+      const re=syr[bin]/denom,im=syi[bin]/denom;
+      const amplitude=Math.hypot(re,im);
+      return {frequency:bin*fs/fftSize, gainDb:20*Math.log10(Math.max(1e-12,amplitude)),phaseDeg:Math.atan2(im,re)*180/Math.PI,amplitude};
+    });
+    return {points,segments};
+  }
+  const api = {randomGenerator,gaussianGenerator,generate,sineFit,metrics,fft,prbsFrequencyResponse};
   root.SignalLab=api;
   if(typeof module!=='undefined' && module.exports) module.exports=api;
 })(typeof self!=='undefined'?self:globalThis);

@@ -1,107 +1,120 @@
-# Filter Lab v1.0 — Virtual Lab Control Series
+# Filter Control Lab v1.1 — Barefoot Control Series
 
-A lightweight digital-filter teaching playground. Open it in a browser, write JavaScript, then compare a 10-second noisy sine input against your filtered output and run a sinusoidal frequency sweep. Suitable for GitHub Pages and low-spec laptops.
+A lightweight, browser-only digital-filter playground. Students implement `init()` and `filter()` in JavaScript, one input sample at a time. The lab shows the 10-second noisy-sine experiment and compares **sine-by-sine frequency sweep** against a **single broadband PRBS / FFT measurement**. There is no npm build, library dependency, or server back end.
 
-## Run locally
+## Run locally or on GitHub Pages
+
+From the unzipped folder:
 
 ```bash
 python3 -m http.server 8000
 ```
 
-Then visit <http://localhost:8000/>. Do not open `index.html` directly using `file://`: Web Workers often require an HTTP origin. No npm, external scripts, or internet access is required once files are local.
+Open <http://localhost:8000/>. Do not use `file://` because Web Workers may be blocked. Publish the extracted files to GitHub Pages to serve the same page over HTTPS.
 
-## Student interface
+**The new default starter is an implemented second-order *resonant* low-pass**, not pass-through. The editor uses a new `localStorage` key in v1.1 to make the starter visible on first launch. If you've edited the filter already, **Reset starter** explicitly loads the shipped example.
 
-```javascript
+## Student API: sample-by-sample and causal
+
+```js
 function init() {
-  memory.prevY = 0;
-  memory.history = [];
+  memory.x1 = 0;
+  memory.y1 = 0;
 }
-
 function filter() {
-  const x = state.x;
-  // Write a difference equation here and explicitly update memory.
-  return x; // pass-through placeholder
+  const x = state.x;       // current input sample only
+  const y = /* implement filter equation here */ x;
+  memory.x1 = x;
+  memory.y1 = y;
+  return y;                // must be a finite scalar
 }
 ```
 
-The simulator automatically calls `init()` once **per fresh run** and `filter()` once **per sample**, with global objects accessible to custom functions:
-
-| API | Meaning |
+| Name | Meaning |
 |---|---|
-| `state.x` | **Only** the current input sample; no past/future inputs, timestamp, index, or true sine |
-| `params.fs` | sample rate (Hz) |
-| `params.dt` | sample interval `1 / params.fs` (seconds) |
-| `params.duration` | time-domain signal duration, 10 seconds |
-| `params.frequency` | test sine frequency (Hz) |
-| `params.amplitude` | sine amplitude |
-| `params.noiseStd` | white Gaussian noise standard deviation |
-| `params.offset` | sine DC offset |
-| `params.seed` | reproducible noise seed |
-| `memory` | student-managed persistent object, reset before a new run/sweep frequency |
-| `filter()` | returns a single **finite number** (`y[k]`) |
+| `state.x` | Current input only. No previous input, sample index, time, true sine, or future sample is exposed. |
+| `params.fs` | Sampling frequency in Hz |
+| `params.dt` | Sampling interval `1 / params.fs` in seconds |
+| `params.frequency`, `.amplitude`, `.noiseStd`, `.offset`, `.seed` | Signal-generator settings for experiments; **do not use the reference sine settings to cheat on filter evaluation** |
+| `memory` | Persistent, student-managed object; store earlier inputs/outputs and coefficient values yourself |
+| `init()` | Optional, executed once for each independent run, sine test frequency, or PRBS experiment |
+| `filter()` | Required, called once per input sample; must return a finite number |
 
-`state` and `params` are frozen read-only snapshots. `memory` is writable and must be explicitly initialized inside `init()`. The `state`, `params`, and `memory` names are reserved at the script's top level. Students may define unlimited custom functions, all sharing the global context.
+`state`, `params` and `memory` are available in custom functions without passing them as arguments. Both `state` and `params` are immutable snapshots. `memory` starts as `{}`, and `init()` can allocate arrays (`memory.history=[]`) and initialize previous values. **Past input samples cannot be read unless explicitly stored in `memory`.**
 
-The simulator intentionally reveals the signal-generation parameters in `params` for experiments, but **students should only use `state.x` and `params.dt`/`params.fs` in their filter algorithms**. For assessments, use additional hidden test settings or review code; CSV output alone is not tamper-proof.
+## New resonant biquad starter
 
-## Signal definition
+The continuous-time prototype is
 
-At sample `k` (`t=k/fs`):
+\[
+H(s)=\frac{\omega_0^2}{s^2+2\zeta\omega_0s+\omega_0^2}, \quad \omega_0=2\pi f_0.
+\]
+
+The example sets **natural frequency** `f0 = 5 Hz` and damping ratio **`zeta = 0.30`**. Tustin's bilinear transform is used with frequency prewarping, `K = tan(pi * f0 / fs)`. Define `D = 1 + 2*zeta*K + K*K`:
+
+```text
+b0 = K*K/D          b1 = 2*b0                 b2 = b0
+a1 = 2*(K*K-1)/D    a2 = (1-2*zeta*K+K*K)/D
+
+y[k] = b0*x[k] + b1*x[k-1] + b2*x[k-2]
+     - a1*y[k-1] - a2*y[k-2]
+```
+
+`init()` calculates coefficients once and initializes `x1,x2,y1,y2`. `filter()` updates these four samples **after** calculating `y[k]`.
+
+For a general second-order low-pass, a resonance peak exists if `0 < zeta < 1/sqrt(2)`. The default shows approximately **+4.85 dB around 4.5 Hz** at 100 Hz sampling. Setting `zeta = Math.SQRT1_2` produces a second-order Butterworth response **without** a resonance peak. Here `f0` is the **natural frequency**, not generally the -3 dB cutoff for resonant designs.
+
+## 10-second noisy signal experiment
 
 ```text
 clean[k] = offset + amplitude * sin(2*pi*frequency*k/fs)
 x[k] = clean[k] + noiseStd * GaussianWhiteNoise[k]
 ```
 
-The noise is repeatable for the same `seed`. The app generates exactly `duration * fs` samples, with the first sample at `t=0` and the last sample at `t=duration-dt`.
+Click **Run 10 s**, or **Step 1 sample** to advance manually. The generator uses a deterministic noise seed. The amplitude/noise/offset controls affect this 10-second experiment, not the clean-sine or PRBS measurements.
 
-### Examples of filter equations to implement
+## Frequency-response measurement methods
 
-- **Moving average (FIR)**: `y[k] = (x[k] + ... + x[k-N+1]) / N`; students must store past samples in `memory.history`.
-- **One-pole IIR**: `y[k] = α*x[k] + (1-α)*y[k-1]`; students must store `y[k-1]` themselves.
-- **General biquad**: `y[k] = b0*x[k]+b1*x[k-1]+b2*x[k-2]-a1*y[k-1]-a2*y[k-2]`; students store both input and output delays.
+Both measurements use the **actual student `filter()`** at the selected sampling frequency and measure the output. They do **not** calculate the response from the coefficients. Gain/phase represent a transfer function only for approximately linear, time-invariant filters.
 
-## Frequency sweep
+### Method A: sine sweep (22 tests)
 
-The app checks **22 logarithmically spaced frequencies** from 0.35 Hz to `min(30 Hz, 0.4*fs)`. For each frequency it:
+- 22 logarithmically spaced frequencies from **0.35 Hz** to `min(30 Hz, 0.4*fs)`.
+- Each frequency has a fresh `memory` and `init()`.
+- Generate a clean unit-amplitude sine; discard four periods, measure five periods.
+- Fit `y(t) ≈ c + a*sin(2πft) + b*cos(2πft)` by least squares.
+- Gain: `20*log10(sqrt(a*a+b*b))`; phase: `atan2(b,a)` degrees.
 
-1. Creates fresh `memory`, then calls `init()` once.
-2. Generates a **clean, unit-amplitude sinusoid**, deliberately turning off noise during the sweep.
-3. Discards the first 4 cycles to allow filter transients to settle.
-4. Fits a sine and cosine to the final 5 cycles to estimate output amplitude and phase.
-5. Plots `20*log10(outputAmplitude / inputAmplitude)` and output phase in degrees.
+### Method B: PRBS / FFT (one broadband test)
 
-These are numerical measurements, **not an analytical transfer function**. Gain and phase have the usual LTI meaning when the student's filter is approximately linear and time-invariant. At very low cutoff frequencies, four transient cycles may not fully settle; students should interpret the sweep accordingly. Phase is wrapped to ±180°, and longer tests are used for lower sweep frequencies (the sweep is not constrained to 10 s).
+- Generate one deterministic **pseudo-random binary sequence** (PRBS), taking values **-1** and **+1**. It is broadband, so many frequencies are excited *at the same time*.
+- Call `init()` **once** for the experiment, discard **4,096 samples** as warm-up, then record **32,768 input/output pairs**. The experiment is longer than the 10-second noisy-sine test.
+- Use **4,096-point Hann-windowed FFTs**, **50% overlap**, and average **15 cross-/auto-spectral estimates** (the H1 estimator):
 
-## Error metrics
+  \[
+  \hat{H}(f)=\frac{\sum_m Y_m(f)X_m^*(f)}{\sum_m X_m(f)X_m^*(f)}.
+  \]
 
-- `Input RMSE = sqrt(mean((x-clean)^2))`
-- `Output RMSE = sqrt(mean((y-clean)^2))`
-- `Improvement dB = 20*log10(Input RMSE / Output RMSE)`
+- Convert the complex ratio to gain (`20 log10 |H|`) and phase (`arg H`, wrapped to ±180°). Plot nearest FFT bins to the same 22 requested frequencies as the sine sweep.
+- Repeating a test with the same seed produces the same PRBS and response. PRBS has **no** sine frequency: during that test, `params.frequency = 0`. The filter must not depend on knowing the input's clean sine.
 
-These RMSE metrics compare against the undelayed true sine, so a filter's phase shift can increase RMSE even while it removes noise. Consider both waveform quality and frequency response; the app does not claim to calculate formal broadband signal-to-noise ratio.
+**Tradeoff:** A sine sweep gives accurate individual tone measurements but uses many independent experiments. PRBS measures a broadband response in one run, with spectral averaging; its curve may exhibit some measurement variability or smoothing, particularly for sharp resonances. Compare both results on the overlaid plots (teal/orange for sine; violet for PRBS).
 
-## Export
+## CSV exports
 
-- **Save .js** — student filter source.
-- **Export CSV** — samples with `sample,time_s,input_x,ideal_sine,output_y,input_error,output_error,sample_rate_hz,sine_frequency_hz,noise_std,seed`.
-- **Export sweep CSV** — `frequency_hz,gain_db,phase_deg,amplitude`.
+- **Export CSV**: the ten-second time-domain data, including `input_x`, `ideal_sine`, `output_y`, and generator settings.
+- **Export response CSV**: every available frequency-response measurement. New format: `method,frequency_hz,gain_db,phase_deg,amplitude`, with `method` equal to `sine` or `prbs`. If both tests are run, both sets appear in one file.
+- **Save .js**: current student filter code. Edits are saved only in the browser; no automatic GitHub submission.
 
-The code editor autosaves locally to its own browser-storage key. The app does not send code or CSV to GitHub.
+## Experiments
 
-## Lifecycle and safety
+1. Run the default `zeta=0.30` starter. Compare the **+4–5 dB resonance** obtained by the sine sweep and PRBS.
+2. Change `zeta` to `Math.SQRT1_2` (approximately 0.707). The resonant peak should disappear: this is the **Butterworth** case.
+3. Try `zeta=0.1`, then `zeta=1.0`. Discuss resonance versus damping, settling time and how many frequencies are sufficient to locate a narrow peak.
+4. Change `f0`, `params.fs`, or the noisy-sine input frequency. Discuss prewarping, Nyquist, and why the time-domain RMSE against the *undelayed* sine can rise even if high-frequency noise is attenuated.
 
-- **Apply & reset** creates fresh filter state and calls `init()` once.
-- **Step 1 sample** advances the filter by one sample, preserving `memory`.
-- **Run 10 s** processes the remaining samples in the current session; if code/config changed, it automatically resets first.
-- **Run frequency sweep** measures each frequency independently, using new memory and a new `init()` for each. It does not modify the ongoing 10-second time-domain result.
-- The controller code executes inside a browser Worker. A time limit terminates a non-returning worker, but this is **not** a security-hardened sandbox. Use trusted classroom code.
+## Notes and validation
 
-## GitHub Pages
+Run `node tests/run_tests.js` for numeric Worker checks. The student code executes inside a Web Worker, not a hardened sandbox; use trusted classroom code. The Worker timeout interrupts code that does not return, but no guarantee of safe hostile-code execution is provided.
 
-Upload the project files to a GitHub repository root. Under Settings → Pages, select Deploy from branch `main / (root)`. The published site works entirely client-side.
-
-## License
-
-MIT; see LICENSE.
+MIT licensed; see `LICENSE`.

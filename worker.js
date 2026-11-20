@@ -75,6 +75,25 @@ function sweep(cfg){
   }
   return result;
 }
+// Broadband PRBS experiment: same causal filter(), once per sample.
+// 4096 warm-up samples are ignored; then 32768 samples are analyzed via
+// Hann-windowed 4096-point FFTs with 50% overlap. Memory is reset once
+// before the PRBS sequence, NOT once per FFT window.
+function prbs(cfg){
+  const base=validate(cfg);
+  const p=Object.freeze({...base, frequency:0, amplitude:1, noiseStd:0,offset:0});
+  const runtime=createFilter(codeText,p);
+  const rng=SignalLab.randomGenerator((base.seed^0x5a5aa55a)>>>0);
+  const warm=4096, count=32768;
+  const inputs=new Float64Array(count),outputs=new Float64Array(count);
+  for(let k=0;k<warm+count;k++){
+    const x=rng()<0.5?-1:1;
+    let y;
+    try{y=runtime.process(x);}catch(e){throw Error('PRBS sample '+k+': '+e.message);}
+    if(k>=warm){inputs[k-warm]=x;outputs[k-warm]=y;}
+  }
+  return SignalLab.prbsFrequencyResponse(inputs,outputs,p.fs,logarithmicFrequencies(p.fs));
+}
 self.onmessage=function(evt){
   const {id,action,config,code}=evt.data;
   try{
@@ -90,6 +109,9 @@ self.onmessage=function(evt){
       if(!session)throw Error('Press Apply & reset first');
       while(session.index<session.input.length)next(session);
       result={rows:session.rows.slice(),done:true,metrics:SignalLab.metrics(session.rows)};
+    }else if(action==='prbs'){
+      if(!codeText)throw Error('Press Apply & reset first');
+      result=prbs(config);
     }else if(action==='sweep'){
       if(!codeText)throw Error('Press Apply & reset first');
       result={points:sweep(config)};

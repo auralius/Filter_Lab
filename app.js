@@ -1,28 +1,44 @@
-/* Barefoot Filter Lab v1.0 — browser UI; filtering runs only in a Worker. */
+/* Barefoot Filter Lab v1.1 — browser UI; filtering runs only in a Worker. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const savedKey='barefoot.filterlab.student.code.v1_0';
-  const starterCode=`// Only state.x is available (one current sample).
-// No past samples are provided automatically.
+  const savedKey='barefoot.filterlab.student.code.v1_1';
+  const starterCode=`// Second-order resonant low-pass filter (Tustin biquad).
+// Try changing zeta and watch the frequency-response peak.
 function init() {
-  memory.history = [];
-  memory.prevY = 0;
+  const f0 = 5.0;       // Natural frequency (Hz)
+  const zeta = 0.30;    // Damping (< 0.707 gives resonance)
+  const K = Math.tan(Math.PI * f0 / params.fs);
+  const D = 1 + 2 * zeta * K + K * K;
+
+  memory.b0 = K * K / D;
+  memory.b1 = 2 * memory.b0;
+  memory.b2 = memory.b0;
+  memory.a1 = 2 * (K * K - 1) / D;
+  memory.a2 = (1 - 2 * zeta * K + K * K) / D;
+
+  memory.x1 = 0; memory.x2 = 0;
+  memory.y1 = 0; memory.y2 = 0;
 }
 
-// You may define other custom JavaScript functions.
 function filter() {
-  const x = state.x;
+  const x = state.x;   // Current sample only
+  const y = memory.b0 * x
+          + memory.b1 * memory.x1
+          + memory.b2 * memory.x2
+          - memory.a1 * memory.y1
+          - memory.a2 * memory.y2;
 
-  // TODO: Implement your difference equation.
-  // Store previous samples/output in memory.
-  const y = x;  // Pass-through starter (no filtering)
-
-  return y;    // One scalar per sample
+  // You MUST update the input/output history yourself.
+  memory.x2 = memory.x1;
+  memory.x1 = x;
+  memory.y2 = memory.y1;
+  memory.y1 = y;
+  return y;
 }`;
   const ids=['frequency','amplitude','noiseStd','offset','fs','seed'];
   let codeEditor=$('codeEditor'), worker=null, requestId=0, pending=new Map();
-  let appliedCode='',dirty=true,busy=false,rows=[],sweepRows=[],configuration=null;
+  let appliedCode='',dirty=true,busy=false,rows=[],sweepRows=[],prbsRows=[],configuration=null;
   const initialCode=localStorage.getItem(savedKey);
   codeEditor.value=initialCode===null?starterCode:initialCode;
   function refreshLines(){
@@ -51,7 +67,7 @@ function filter() {
   function newWorker(){
     if(worker)worker.terminate();
     for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Worker restarted.'));}pending.clear();
-    worker=new Worker('./worker.js?v=1.0.0');
+    worker=new Worker('./worker.js?v=1.1.0');
     worker.onmessage=evt=>{
       const {id,ok,result,error}=evt.data,p=pending.get(id);if(!p)return;
       clearTimeout(p.timer);pending.delete(id);
@@ -77,7 +93,7 @@ function filter() {
       try{worker.postMessage({id,action,...extra});}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}
     });
   }
-  function disabled(v){busy=v;for(const id of ['runBtn','stepBtn','resetBtn','applyBtn','sweepBtn','restoreBtn'])$(id).disabled=v;}
+  function disabled(v){busy=v;for(const id of ['runBtn','stepBtn','resetBtn','applyBtn','sweepBtn','prbsBtn','restoreBtn'])$(id).disabled=v;}
   async function operation(task){
     if(busy)return;
     disabled(true);
@@ -85,11 +101,11 @@ function filter() {
     finally{disabled(false);}
   }
   function clearResults(){
-    rows=[];sweepRows=[];$('exportSignalBtn').disabled=true;$('exportSweepBtn').disabled=true;
+    rows=[];sweepRows=[];prbsRows=[];$('exportSignalBtn').disabled=true;$('exportSweepBtn').disabled=true;
     $('inRmse').textContent='—';$('outRmse').textContent='—';$('improvement').textContent='—';
     $('sampleCount').textContent='0 / '+Math.round(10*Number($('fs').value));
     $('plotMessage').textContent='Ready for ten seconds of data.';
-    $('sweepMessage').textContent='Run a sweep after applying your code.';
+    $('sweepMessage').textContent='Run either method, or both, to compare responses.';
     render();
   }
   async function compile(){
@@ -140,11 +156,20 @@ function filter() {
   }));
   $('sweepBtn').addEventListener('click',()=>operation(async()=>{
     if(dirty||!configuration)await compile();
-    status('Sweeping…');$('sweepMessage').textContent='Testing clean sinusoids across 22 frequencies…';
-    const result=await send('sweep',{config:configuration},15000);
+    status('Sine sweep…');$('sweepMessage').textContent='Testing clean sinusoids across 22 frequencies…';
+    const result=await send('sweep',{config:configuration},20000);
     sweepRows=result.points;
     $('exportSweepBtn').disabled=false;
-    $('sweepMessage').textContent='Measured '+sweepRows.length+' frequencies; each used fresh memory and a clean input sine. The 10 s time-domain run is unchanged.';
+    $('sweepMessage').textContent='Sine sweep: 22 independent clean-tone tests (4 warm-up + 5 fitted cycles). '+(prbsRows.length?'PRBS overlay also shown.':'Try PRBS to compare.');
+    status('Ready');render();
+  }));
+  $('prbsBtn').addEventListener('click',()=>operation(async()=>{
+    if(dirty||!configuration)await compile();
+    status('PRBS analysis…');$('sweepMessage').textContent='Exciting all frequencies using a seeded ±1 PRBS; estimating H(f) from averaged FFT cross-spectra…';
+    const result=await send('prbs',{config:configuration},25000);
+    prbsRows=result.points;
+    $('exportSweepBtn').disabled=false;
+    $('sweepMessage').textContent='PRBS: 1 broadband test, 22 measured frequency bins, '+result.segments+' averaged FFT windows; '+(sweepRows.length?'sine overlay also shown.':'run a sine sweep to compare.');
     status('Ready');render();
   }));
   $('restoreBtn').addEventListener('click',()=>{
@@ -165,9 +190,12 @@ function filter() {
     saveBlob('filter_signal.csv',csv.join('\n')+'\n','text/csv');
   });
   $('exportSweepBtn').addEventListener('click',()=>{
-    if(!sweepRows.length)return;
-    const csv=['frequency_hz,gain_db,phase_deg,amplitude',...sweepRows.map(p=>[p.frequency,p.gainDb,p.phaseDeg,p.amplitude].join(','))].join('\n');
-    saveBlob('filter_frequency_sweep.csv',csv+'\n','text/csv');
+    if(!sweepRows.length&&!prbsRows.length)return;
+    const csv=['method,frequency_hz,gain_db,phase_deg,amplitude'];
+    for(const [method,points] of [['sine',sweepRows],['prbs',prbsRows]]) {
+      for(const p of points)csv.push([method,p.frequency,p.gainDb,p.phaseDeg,p.amplitude].join(','));
+    }
+    saveBlob('filter_frequency_response.csv',csv.join('\n')+'\n','text/csv');
   });
   function plot(canvas,series,opts={}){
     const bounds=canvas.getBoundingClientRect();if(bounds.width<20)return;
@@ -219,8 +247,15 @@ function filter() {
       {points:coord(rows),color:'#0ca39c',width:2.0}
     ],{xMin:0,xMax:10,xLabel:'time (s)'});
     const fs=Number($('fs').value),lo=0.35,hi=Math.min(30,0.4*fs);
-    plot($('gainChart'),[{points:sweepRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#078b91',width:2.2}],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:sweepRows.length?Math.min(-3,...sweepRows.map(x=>x.gainDb))-5:-40,yMax:sweepRows.length?Math.max(3,...sweepRows.map(x=>x.gainDb))+5:5});
-    plot($('phaseChart'),[{points:sweepRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#e79931',width:2.2}],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:-180,yMax:180});
+    const curves=[...sweepRows,...prbsRows];
+    plot($('gainChart'),[
+      {points:sweepRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#078b91',width:2.2},
+      {points:prbsRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#7960b5',width:2.0}
+    ],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:curves.length?Math.min(-3,...curves.map(x=>x.gainDb))-5:-40,yMax:curves.length?Math.max(3,...curves.map(x=>x.gainDb))+5:5});
+    plot($('phaseChart'),[
+      {points:sweepRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#e79931',width:2.2},
+      {points:prbsRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#7960b5',width:2.0}
+    ],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:-180,yMax:180});
   }
   window.addEventListener('resize',render);
   $('dtLabel').textContent='Tₛ = '+(1/Number($('fs').value)).toFixed(3)+' s';
