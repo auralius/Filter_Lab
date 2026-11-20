@@ -1,4 +1,4 @@
-# Filter Control Lab v1.1 — Barefoot Control Series
+# Filter Control Lab v1.1 — Virtual Lab Control Series
 
 A lightweight, browser-only digital-filter playground. Students implement `init()` and `filter()` in JavaScript, one input sample at a time. The lab shows the 10-second noisy-sine experiment and compares **sine-by-sine frequency sweep** against a **single broadband PRBS / FFT measurement**. There is no npm build, library dependency, or server back end.
 
