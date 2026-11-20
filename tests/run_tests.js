@@ -1,0 +1,63 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('assert');
+const root=path.resolve(__dirname,'..');
+function makeHarness(){
+ const sent=[];
+ const context={console,Math,Number,Object,Array,Date,Error,Set,Map,JSON,String,Boolean,Infinity,NaN};
+ context.self=context;context.postMessage=function(msg){sent.push(msg);};
+ context.importScripts=function(filename){vm.runInContext(fs.readFileSync(path.join(root,filename),'utf8'),sandbox,{filename});};
+ const sandbox=vm.createContext(context);
+ vm.runInContext(fs.readFileSync(path.join(root,'worker.js'),'utf8'),sandbox,{filename:'worker.js'});
+ let id=0;
+ function request(action,extra={}){const m={id:++id,action,...extra};sandbox.self.onmessage({data:m});const result=sent.pop();assert.strictEqual(result.id,id);return result;}
+ return {request};
+}
+const p={fs:100,duration:10,frequency:2,amplitude:1,noiseStd:0.45,offset:0,seed:17};
+const h=makeHarness();
+let count=0;
+function ok(name,condition){assert(condition,name);count++;console.log('PASS',name);}
+let q=h.request('compile',{config:p,code:'function init(){memory.n=0;} function filter(){memory.n++;return state.x;}'});
+
+ok('compile optional init and globals',q.ok&&q.result.ready);
+let s=h.request('step');ok('step one sample',s.ok&&s.result.rows.length===1);
+let r=h.request('run');ok('run remaining 999 samples',r.ok&&r.result.rows.length===1000);
+ok('pass-through has exactly equal input/output',r.result.rows.every(x=>x.x===x.y));
+ok('pass-through RMSE improvement zero',Math.abs(r.result.metrics.improvementDb)<1e-11);
+q=h.request('compile',{config:p,code:'function filter(){return 0;}'});
+ok('init() optional',q.ok);
+r=h.request('run');ok('scalar output accepted',r.ok&&r.result.rows.every(x=>x.y===0));
+q=h.request('compile',{config:p,code:'function init(){memory.h=[];} function mean(){memory.h.push(state.x);return memory.h.reduce((a,b)=>a+b,0)/memory.h.length;} function filter(){return mean();}'});
+r=h.request('run');ok('helper functions and memory array work',r.ok&&Math.abs(r.result.rows[0].y-r.result.rows[0].x)<1e-9&&r.result.rows.length===1000);
+q=h.request('compile',{config:p,code:'function init(){memory.y=0;} function filter(){memory.y=0.15*state.x+.85*memory.y;return memory.y;}'});
+ok('compile one-pole IIR',q.ok);
+r=h.request('run');ok('IIR filters noisy signal',r.ok&&r.result.metrics.outputRMSE<r.result.metrics.inputRMSE);
+const sweep=h.request('sweep',{config:p});ok('sweep returns 22 frequencies',sweep.ok&&sweep.result.points.length===22);
+ok('IIR has low-pass shape',sweep.result.points[0].gainDb>sweep.result.points[21].gainDb+15);
+q=h.request('compile',{config:p,code:'function filter(){return state.x;}'});
+const passSweep=h.request('sweep',{config:p});ok('pass-through magnitude 0 dB',passSweep.ok&&passSweep.result.points.every(x=>Math.abs(x.gainDb)<.01));
+ok('pass-through phase 0 degrees',passSweep.result.points.every(x=>Math.abs(x.phaseDeg)<.01));
+q=h.request('compile',{config:p,code:'function filter(){return state.xPrev;}'});
+r=h.request('run');ok('previous sample not exposed through state',!r.ok&&r.error.includes('finite number'));
+q=h.request('compile',{config:p,code:'function init(){memory.total=0;} function filter(){memory.total++;return memory.total;}'});
+r=h.request('run');ok('persistent memory updated each call',r.ok&&r.result.rows[999].y===1000);
+q=h.request('compile',{config:p,code:'function filter(){return state.x;}'});
+const another=h.request('run');ok('new run resets filter state',another.ok&&another.result.rows.length===1000);
+q=h.request('compile',{config:p,code:'function filter(){return state.t;}'});
+r=h.request('step');ok('timestamp not exposed through state',!r.ok);
+q=h.request('compile',{config:p,code:'function filter(){return state.x;}'});
+ok('sensible code accepts 0 sample start',q.ok);
+q=h.request('compile',{config:p,code:'function filter(){state.x=99;return state.x;}'});
+r=h.request('step');ok('state is read-only snapshot',!r.ok&&r.error.includes('read only'));
+q=h.request('compile',{config:p,code:'function init(){memory.x=0;} function filter(){return memory.x++;}'});
+r=h.request('step');ok('init runs before first filter',r.ok&&r.result.rows[0].y===0);
+q=h.request('compile',{config:p,code:'function filter(){return "hello";}'});
+r=h.request('step');ok('reject nonnumeric output',!r.ok);
+q=h.request('compile',{config:p,code:'function init(){memory.count=0;} function filter(){memory.count++;return memory.count;}'});
+const c=h.request('sweep',{config:p});ok('sweep uses independent init per frequency',c.ok&&c.result.points.length===22);
+q=h.request('compile',{config:p,code:'function init(){memory.sum=0;} function filter(){memory.sum+=state.x;return memory.sum;}'});
+r=h.request('step');ok('memory starts zero',r.ok&&r.result.rows[0].y===r.result.rows[0].x);
+q=h.request('compile',{config:{...p,fs:50,frequency:30},code:'function filter(){return state.x;}'});
+ok('reject frequency above Nyquist',!q.ok&&q.error.includes('Invalid'));
+q=h.request('compile',{config:p,code:'function foo(){}'});
+ok('filter function required',!q.ok&&q.error.includes('Define a function'));
+console.log('\n'+count+' tests passed.');

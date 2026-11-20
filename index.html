@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Barefoot Filter Lab: write sample-by-sample digital filters and measure their frequency responses in a browser.">
+<title>Filter Lab · Barefoot Control Series</title>
+<link rel="stylesheet" href="./styles.css?v=1.0.0"><script defer src="./app.js?v=1.0.0"></script>
+</head>
+<body>
+<div class="layout">
+  <header class="site-header">
+    <div class="brand"><div class="brand-mark">∿</div><div><strong>FILTER<span>LAB</span></strong><small>BAREFOOT CONTROL SERIES</small></div></div>
+    <div class="header-right"><span class="product-tag">DSP · JAVASCRIPT · v1.0</span><span class="status" id="statusLabel"><i></i> Loading</span></div>
+  </header>
+  <div class="hero">
+    <div><div class="eyebrow">DIGITAL SIGNAL PROCESSING <span></span> INTERACTIVE LABORATORY</div><h1>Shape the signal.<br><em>Discover the filter.</em></h1><p>One noisy sample at a time. Write your own difference equation, store history in <code>memory</code>, and see its time-domain output and frequency response.</p></div>
+    <div class="hero-model"><span>THE DISCRETE-TIME FILTER</span><div class="hero-equations">x[k] = C + A sin(2πfkTₛ) + n[k]</div><div class="signal-symbol">x[k] &nbsp; → &nbsp; <b>H(z)</b> &nbsp; → &nbsp; y[k]</div><small>Only x[k] reaches student code</small></div>
+  </div>
+  <div class="metrics">
+    <div class="metric"><span>INPUT RMSE</span><div><strong id="inRmse">—</strong></div><small>Raw vs ideal sine</small></div>
+    <div class="metric"><span>OUTPUT RMSE</span><div><strong id="outRmse">—</strong></div><small>Filtered vs ideal sine</small></div>
+    <div class="metric"><span>RMSE IMPROVEMENT</span><div><strong id="improvement">—</strong><b>dB</b></div><small>Positive = smaller error</small></div>
+    <div class="metric"><span>PROCESSED SAMPLES</span><div><strong id="sampleCount">0 / 1000</strong></div><small>One <code>filter()</code> call per sample</small></div>
+  </div>
+  <main>
+    <div class="main-grid">
+      <section class="panel editor-panel">
+        <div class="panel-header"><div><span class="section-tag">01 / YOUR ALGORITHM</span><h2>JavaScript filter</h2></div><span class="small-chip">INIT() + FILTER()</span></div>
+        <div class="editor-toolbar"><span>STUDENT STARTER · PASS-THROUGH</span><div><a href="#apiTitle">API reference ↓</a><button id="restoreBtn">Reset starter</button></div></div>
+        <div class="code-wrap"><div id="lineNumbers" class="code-gutter"></div><textarea id="codeEditor" spellcheck="false" autocorrect="off" autocomplete="off" autocapitalize="off" aria-label="JavaScript filter editor"></textarea></div>
+        <div class="editor-actions"><button class="button primary" id="applyBtn">↻ Apply &amp; reset</button><button class="button secondary" id="saveBtn">↓ Save .js</button></div>
+        <p class="editor-message" id="message" role="status">Write a filter and select Apply &amp; reset.</p>
+        <section class="api-guide" id="apiTitle">
+          <div class="api-title"><h3>Student API reference</h3><span>Only the current signal sample is visible</span></div>
+          <p>The simulator calls <code>init()</code> once per fresh run and <code>filter()</code> once per sampled input. Globals <code>state</code>, <code>params</code>, and <code>memory</code> are available in all helper functions. <strong>Do not declare these names at the top level.</strong></p>
+          <div class="api-category"><h4>Standard functions</h4><dl><div><dt><code>init()</code></dt><dd>Optional; initialize memory before the first sample.</dd></div><div><dt><code>filter()</code></dt><dd>Required; returns one finite scalar output <code>y</code>.</dd></div></dl></div>
+          <div class="api-category"><h4><code>state</code> · current input only</h4><dl><div><dt><code>state.x</code></dt><dd>The current input sample x[k]. There is <b>no</b> <code>state.xPrev</code>, index, timestamp, or future sample.</dd></div></dl></div>
+          <div class="api-category"><h4><code>params</code> · read-only test configuration</h4><dl><div class="api-accent"><dt><code>params.dt</code></dt><dd>Sampling interval Tₛ, seconds (<code>1 / params.fs</code>).</dd></div><div><dt><code>params.fs</code></dt><dd>Sampling rate (samples/second).</dd></div><div><dt><code>params.duration</code></dt><dd>Signal duration (10 s).</dd></div><div><dt><code>params.frequency</code></dt><dd>Current test sine frequency (Hz), including during a sweep.</dd></div><div><dt><code>params.amplitude</code></dt><dd>Input sine amplitude.</dd></div><div><dt><code>params.noiseStd</code></dt><dd>Noise standard deviation (white Gaussian noise).</dd></div><div><dt><code>params.offset</code></dt><dd>Input DC offset.</dd></div><div><dt><code>params.seed</code></dt><dd>Random seed for reproducible inputs.</dd></div></dl></div>
+          <div class="api-category"><h4><code>memory</code> · your persistent variables</h4><p><code>memory</code> starts empty and is reset before each independent run/sweep frequency. Your code owns its properties. Store previous input/output samples and filter state here.</p><pre><code>function init() {
+  memory.prevY = 0;
+  memory.history = [];
+}
+// Inside filter():
+memory.history.push(state.x);
+const n = memory.history.length;
+const previous = n >= 2 ? memory.history[n-2] : 0;</code></pre></div>
+          <p class="api-foot"><strong>Read state and params; write memory; return one number.</strong> The reference sine and noise sequence are used for evaluation but are not given through <code>state</code>. For fair graded tests, don't reconstruct the reference from exposed test settings.</p>
+        </section>
+      </section>
+      <div class="right-stack">
+        <section class="panel setup-panel">
+          <div class="panel-header"><div><span class="section-tag">02 / SIGNAL GENERATOR</span><h2>Design the noisy input</h2></div><span class="small-chip">10 SECONDS</span></div>
+          <p class="helper-text">Each setting generates a reproducible sine + white Gaussian noise test. Changing settings resets filter memory and results.</p>
+          <div class="fields">
+            <label class="field"><span>SINE FREQUENCY (Hz)</span><input id="frequency" type="number" min="0.1" max="40" step="0.1" value="2"></label>
+            <label class="field"><span>SINE AMPLITUDE</span><input id="amplitude" type="number" min="0" max="10" step="0.1" value="1"></label>
+            <label class="field"><span>NOISE σ · STANDARD DEVIATION</span><input id="noiseStd" type="number" min="0" max="5" step="0.05" value="0.45"></label>
+            <label class="field"><span>DC OFFSET</span><input id="offset" type="number" min="-5" max="5" step="0.1" value="0"></label>
+            <label class="field"><span>SAMPLING FREQUENCY</span><select id="fs"><option value="50">50 Hz</option><option value="100" selected>100 Hz</option><option value="200">200 Hz</option><option value="500">500 Hz</option></select></label>
+            <label class="field"><span>NOISE SEED</span><input id="seed" type="number" min="1" max="2147483647" step="1" value="17"></label>
+          </div>
+          <div class="setup-note">10 s duration · <span id="dtLabel">Tₛ = 0.010 s</span> · white noise (not frequency-shaped)</div>
+          <div class="controls"><button class="button primary" id="runBtn">▶ Run 10 s</button><button class="button secondary" id="stepBtn">→ Step 1 sample</button><button class="button secondary" id="resetBtn">↺ Reset</button></div>
+          <p class="helper-text">Step calls your filter exactly once. Run processes the remaining samples. Neither reveals earlier values unless you stored them in <code>memory</code>.</p>
+        </section>
+        <section class="panel graph-panel">
+          <div class="panel-header"><div><span class="section-tag">03 / TIME DOMAIN</span><h2>Input and filtered signal</h2></div><button class="button outline" id="exportSignalBtn" disabled>↓ Export CSV</button></div>
+          <div class="legend"><span><i class="dot raw"></i>Noisy x[k]</span><span><i class="dot clean"></i>Ideal sine</span><span><i class="dot filtered"></i>Output y[k]</span></div>
+          <div class="chart-frame"><canvas id="timeChart" aria-label="Noisy input, ideal sine and filtered output versus time"></canvas></div>
+          <p class="helper-text" id="plotMessage">Apply the code, then Run 10 s or Step 1 sample.</p>
+        </section>
+      </div>
+    </div>
+    <section class="panel sweep-panel">
+      <div class="panel-header"><div><span class="section-tag">04 / FREQUENCY DOMAIN</span><h2>Measure the frequency response</h2><p class="helper-text">A separate clean sinusoidal experiment at each frequency. New memory and a new <code>init()</code> per frequency; transients are discarded.</p></div><div class="sweep-actions"><button class="button primary" id="sweepBtn">∿ Run frequency sweep</button><button class="button outline" id="exportSweepBtn" disabled>↓ Export sweep CSV</button></div></div>
+      <div class="sweep-charts"><div><div class="plot-title">Magnitude response <span>dB · logarithmic frequency axis</span></div><div class="chart-frame"><canvas id="gainChart" aria-label="Filter magnitude frequency response"></canvas></div></div><div><div class="plot-title">Phase response <span>degrees · wrapped to ±180°</span></div><div class="chart-frame"><canvas id="phaseChart" aria-label="Filter phase frequency response"></canvas></div></div></div>
+      <p class="helper-text" id="sweepMessage">Run a sweep after applying your code. Gain and phase are meaningful for approximately linear, time-invariant filters.</p>
+    </section>
+    <section class="panel learning-panel"><div class="panel-header"><div><span class="section-tag">05 / STUDENT CHALLENGES</span><h2>Try a filter equation</h2></div></div><div class="challenge-grid"><div><b>01 · Pass-through</b><p>Return <code>state.x</code>. Why does the frequency sweep show approximately 0 dB at every frequency?</p></div><div><b>02 · Moving average</b><p>Store recent inputs in <code>memory.history</code>. Average the last N samples.</p></div><div><b>03 · First-order IIR</b><p>Implement <code>y[k] = α x[k] + (1−α)y[k−1]</code>. Choose α from cutoff and Tₛ.</p></div><div><b>04 · Biquad</b><p>Implement a second-order difference equation. Compare the magnitude and phase plots.</p></div></div></section>
+  </main>
+  <footer><span><strong>BAREFOOT CONTROL SERIES</strong> · Filter Lab v1.0</span><span>Browser-only · No dependencies · GitHub Pages-ready</span></footer>
+</div></body></html>
