@@ -47,9 +47,16 @@ function next(s){
   s.rows.push(row);s.index++;
   return row;
 }
+// Broader Bode-like sweep. Keep the lowest frequency resolvable by the
+// PRBS H1 estimator (>= about 3 FFT bins), so both methods can be compared.
+const SWEEP_POINTS = 60;
+const PRBS_FFT_SIZE = 16384;
+function sweepLimits(fs) {
+  return {lo:Math.max(0.02,3*fs/PRBS_FFT_SIZE),hi:0.45*fs};
+}
 function logarithmicFrequencies(fs){
-  const lo=0.35,hi=Math.min(30,0.4*fs), count=22;
-  return Array.from({length:count},(_,i)=>lo*Math.pow(hi/lo,i/(count-1)));
+  const {lo,hi}=sweepLimits(fs);
+  return Array.from({length:SWEEP_POINTS},(_,i)=>lo*Math.pow(hi/lo,i/(SWEEP_POINTS-1)));
 }
 function sweep(cfg){
   const cfgBase=validate(cfg), result=[];
@@ -61,7 +68,7 @@ function sweep(cfg){
     const fs=p.fs,cyclesWarm=4,cyclesMeasure=5;
     let warmN=Math.ceil(cyclesWarm*fs/frequency),
         measureN=Math.ceil(cyclesMeasure*fs/frequency);
-    if(warmN+measureN>16000)throw Error('Frequency sweep simulation length exceeded limit.');
+    if(warmN+measureN>150000)throw Error('Frequency sweep simulation length exceeded limit.');
     const output=[];
     for(let k=0;k<warmN+measureN;k++){
       const t=k/fs,x=Math.sin(2*Math.PI*frequency*t);
@@ -76,15 +83,15 @@ function sweep(cfg){
   return result;
 }
 // Broadband PRBS experiment: same causal filter(), once per sample.
-// 4096 warm-up samples are ignored; then 32768 samples are analyzed via
-// Hann-windowed 4096-point FFTs with 50% overlap. Memory is reset once
+// 8192 warm-up samples are ignored; then 131072 samples are analyzed via
+// Hann-windowed 16384-point FFTs with 50% overlap. Memory is reset once
 // before the PRBS sequence, NOT once per FFT window.
 function prbs(cfg){
   const base=validate(cfg);
   const p=Object.freeze({...base, frequency:0, amplitude:1, noiseStd:0,offset:0});
   const runtime=createFilter(codeText,p);
   const rng=SignalLab.randomGenerator((base.seed^0x5a5aa55a)>>>0);
-  const warm=4096, count=32768;
+  const warm=8192, count=131072;
   const inputs=new Float64Array(count),outputs=new Float64Array(count);
   for(let k=0;k<warm+count;k++){
     const x=rng()<0.5?-1:1;
@@ -92,7 +99,7 @@ function prbs(cfg){
     try{y=runtime.process(x);}catch(e){throw Error('PRBS sample '+k+': '+e.message);}
     if(k>=warm){inputs[k-warm]=x;outputs[k-warm]=y;}
   }
-  return SignalLab.prbsFrequencyResponse(inputs,outputs,p.fs,logarithmicFrequencies(p.fs));
+  return SignalLab.prbsFrequencyResponse(inputs,outputs,p.fs,logarithmicFrequencies(p.fs),PRBS_FFT_SIZE);
 }
 self.onmessage=function(evt){
   const {id,action,config,code}=evt.data;

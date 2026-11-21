@@ -105,13 +105,21 @@
       }
       segments++;
     }
-    const points=desiredFrequencies.map(f=>{
-      const bin=Math.max(1,Math.min(half-1,Math.round(f*fftSize/fs)));
+    // Interpolate the complex H1 estimate between neighboring FFT bins.
+    // This keeps frequency coordinates on the shared logarithmic grid and
+    // avoids duplicated lower-frequency bins in the wider Bode plot.
+    function estimate(bin){
       const denom=sxx[bin];
-      if(denom<=1e-20)throw Error('Insufficient PRBS energy near '+f.toFixed(2)+' Hz.');
-      const re=syr[bin]/denom,im=syi[bin]/denom;
+      if(denom<=1e-20)throw Error('Insufficient PRBS energy near FFT bin '+bin+'.');
+      return {re:syr[bin]/denom,im:syi[bin]/denom};
+    }
+    const points=desiredFrequencies.map(f=>{
+      const index=Math.max(1,Math.min(half-1,f*fftSize/fs));
+      const bin0=Math.floor(index),bin1=Math.min(half,bin0+1),alpha=index-bin0;
+      const a=estimate(bin0), b=bin1===bin0?a:estimate(bin1);
+      const re=a.re+(b.re-a.re)*alpha,im=a.im+(b.im-a.im)*alpha;
       const amplitude=Math.hypot(re,im);
-      return {frequency:bin*fs/fftSize, gainDb:20*Math.log10(Math.max(1e-12,amplitude)),phaseDeg:Math.atan2(im,re)*180/Math.PI,amplitude};
+      return {frequency:f,gainDb:20*Math.log10(Math.max(1e-12,amplitude)),phaseDeg:Math.atan2(im,re)*180/Math.PI,amplitude};
     });
     return {points,segments};
   }

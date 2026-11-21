@@ -1,35 +1,35 @@
-/* Barefoot Filter Lab v1.1 — browser UI; filtering runs only in a Worker. */
+/* Barefoot Filter Lab v1.3 — browser UI; filtering runs only in a Worker. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const savedKey='barefoot.filterlab.student.code.v1_1';
-  const starterCode=`// Second-order resonant low-pass filter (Tustin biquad).
-// Try changing zeta and watch the frequency-response peak.
+  const savedKey='barefoot.filterlab.student.code.v1_2';
+  const starterCode=`// Second-order Butterworth low-pass filter, from our SymPy notebook.
+// Plain Tustin (bilinear) discretization; no frequency prewarping.
+// Reference: auralius.github.io/control-systems-with-sympy/digital-filter.html
 function init() {
-  const f0 = 5.0;       // Natural frequency (Hz)
-  const zeta = 0.30;    // Damping (< 0.707 gives resonance)
-  const K = Math.tan(Math.PI * f0 / params.fs);
-  const D = 1 + 2 * zeta * K + K * K;
+  const fc = 5.0;                   // Cutoff frequency (Hz)
+  const wc = 2 * Math.PI * fc;      // Angular cutoff (rad/s)
+  const Ts = params.dt;            // Sample time (s)
+  const q = Ts * wc;
 
-  memory.b0 = K * K / D;
-  memory.b1 = 2 * memory.b0;
-  memory.b2 = memory.b0;
-  memory.a1 = 2 * (K * K - 1) / D;
-  memory.a2 = (1 - 2 * zeta * K + K * K) / D;
+  // Coefficients A, B, C from the SymPy difference equation
+  memory.A = 1 + 2 * Math.SQRT2 / q + 4 / (q * q);
+  memory.B = 2 - 8 / (q * q);
+  memory.C = 1 - 2 * Math.SQRT2 / q + 4 / (q * q);
 
-  memory.x1 = 0; memory.x2 = 0;
-  memory.y1 = 0; memory.y2 = 0;
+  memory.x1 = 0; memory.x2 = 0;     // Previous inputs
+  memory.y1 = 0; memory.y2 = 0;     // Previous outputs
 }
 
 function filter() {
-  const x = state.x;   // Current sample only
-  const y = memory.b0 * x
-          + memory.b1 * memory.x1
-          + memory.b2 * memory.x2
-          - memory.a1 * memory.y1
-          - memory.a2 * memory.y2;
+  const x = state.x;               // Only current input sample
 
-  // You MUST update the input/output history yourself.
+  // Equation derived with SymPy and the Tustin substitution
+  const y = (x + 2 * memory.x1 + memory.x2
+           - memory.B * memory.y1 - memory.C * memory.y2)
+           / memory.A;
+
+  // Shift the history only AFTER computing y[k]
   memory.x2 = memory.x1;
   memory.x1 = x;
   memory.y2 = memory.y1;
@@ -67,7 +67,7 @@ function filter() {
   function newWorker(){
     if(worker)worker.terminate();
     for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Worker restarted.'));}pending.clear();
-    worker=new Worker('./worker.js?v=1.1.0');
+    worker=new Worker('./worker.js?v=1.3.0');
     worker.onmessage=evt=>{
       const {id,ok,result,error}=evt.data,p=pending.get(id);if(!p)return;
       clearTimeout(p.timer);pending.delete(id);
@@ -132,9 +132,15 @@ function filter() {
     $('plotMessage').textContent=rows.length===n?'Complete: '+rows.length+' samples over 10 seconds.':'Processed '+rows.length+' of '+n+' samples.';
     status(rows.length===n?'Finished':'Ready');render();
   }
+  function updateSweepRangeLabel(){
+    const fs=Number($('fs').value);
+    const lo=Math.max(0.02,3*fs/16384),hi=0.45*fs;
+    $('sweepRangeLabel').textContent='Wide Bode sweep · 60 logarithmic points · '+
+      lo.toFixed(lo<0.1?3:2)+'–'+hi.toFixed(1)+' Hz at fs = '+fs+' Hz (below Nyquist).';
+  }
   function configChanged(){
     if(busy)return;
-    dirty=true;clearResults();
+    dirty=true;clearResults();updateSweepRangeLabel();
     $('dtLabel').textContent='Tₛ = '+(1/Number($('fs').value)).toFixed(3)+' s';
     message('Test configuration changed. Apply & reset before stepping or sweeping.');
     status('Setup changed');
@@ -156,20 +162,20 @@ function filter() {
   }));
   $('sweepBtn').addEventListener('click',()=>operation(async()=>{
     if(dirty||!configuration)await compile();
-    status('Sine sweep…');$('sweepMessage').textContent='Testing clean sinusoids across 22 frequencies…';
-    const result=await send('sweep',{config:configuration},20000);
+    status('Sine sweep…');$('sweepMessage').textContent='Testing 60 logarithmically spaced frequencies…';
+    const result=await send('sweep',{config:configuration},60000);
     sweepRows=result.points;
     $('exportSweepBtn').disabled=false;
-    $('sweepMessage').textContent='Sine sweep: 22 independent clean-tone tests (4 warm-up + 5 fitted cycles). '+(prbsRows.length?'PRBS overlay also shown.':'Try PRBS to compare.');
+    $('sweepMessage').textContent='Sine sweep: 60 logarithmically spaced tones (4 warm-up + 5 fitted cycles). '+(prbsRows.length?'PRBS overlay also shown.':'Try PRBS to compare.');
     status('Ready');render();
   }));
   $('prbsBtn').addEventListener('click',()=>operation(async()=>{
     if(dirty||!configuration)await compile();
     status('PRBS analysis…');$('sweepMessage').textContent='Exciting all frequencies using a seeded ±1 PRBS; estimating H(f) from averaged FFT cross-spectra…';
-    const result=await send('prbs',{config:configuration},25000);
+    const result=await send('prbs',{config:configuration},60000);
     prbsRows=result.points;
     $('exportSweepBtn').disabled=false;
-    $('sweepMessage').textContent='PRBS: 1 broadband test, 22 measured frequency bins, '+result.segments+' averaged FFT windows; '+(sweepRows.length?'sine overlay also shown.':'run a sine sweep to compare.');
+    $('sweepMessage').textContent='PRBS: 1 broadband test, 60 interpolated frequency estimates, '+result.segments+' averaged FFT windows; '+(sweepRows.length?'sine overlay also shown.':'run a sine sweep to compare.');
     status('Ready');render();
   }));
   $('restoreBtn').addEventListener('click',()=>{
@@ -218,9 +224,29 @@ function filter() {
       const y=area.y+i*area.h/4;
       c.beginPath();c.moveTo(area.x,y);c.lineTo(area.x+area.w,y);c.stroke();
       c.textAlign='right';c.fillText(f(yMax-i*(yMax-yMin)/4),area.x-7,y+3);
-      const x=area.x+i*area.w/4;c.beginPath();c.moveTo(x,area.y);c.lineTo(x,area.y+area.h);c.stroke();
-      const val=opts.logX?xMin*Math.pow(xMax/xMin,i/4):xMin+(xMax-xMin)*i/4;
-      c.textAlign='center';c.fillText(f(val),x,area.y+area.h+17);
+      if(!opts.logX){
+        const x=area.x+i*area.w/4;c.beginPath();c.moveTo(x,area.y);c.lineTo(x,area.y+area.h);c.stroke();
+        const val=xMin+(xMax-xMin)*i/4;
+        c.textAlign='center';c.fillText(f(val),x,area.y+area.h+17);
+      }
+    }
+    if(opts.logX){
+      // Bode-style major grid at decades; unobtrusive minor ticks at 2 and 5.
+      const a=Math.floor(Math.log10(xMin)),b=Math.ceil(Math.log10(xMax));
+      for(let e=a;e<=b;e++)for(const mul of [1,2,5]){
+        const val=mul*10**e;
+        if(val<xMin*(1-1e-10)||val>xMax*(1+1e-10))continue;
+        const xpos=xx(val),major=mul===1;
+        c.beginPath();c.lineWidth=major?1:0.5;
+        c.strokeStyle=major?'#d7e1e5':'#edf2f4';
+        c.moveTo(xpos,area.y);c.lineTo(xpos,area.y+area.h);c.stroke();
+        // Label decades and 5x ticks when space permits.
+        if(major){
+          const label=val>=1?String(Math.round(val)):val.toPrecision(1);
+          c.fillStyle='#506674';c.textAlign='center';c.fillText(label,xpos,area.y+area.h+17);
+        }
+      }
+      c.lineWidth=1;c.strokeStyle='#e9eff1';c.fillStyle='#6c7e8c';
     }
     c.textAlign='center';c.fillText(opts.xLabel||'time (s)',area.x+area.w/2,h-5);
     c.save();c.beginPath();c.rect(area.x,area.y,area.w,area.h);c.clip();
@@ -246,7 +272,7 @@ function filter() {
       {points:rows.map(r=>({x:r.t,y:r.clean})),color:'#e99e3a',width:1.9},
       {points:coord(rows),color:'#0ca39c',width:2.0}
     ],{xMin:0,xMax:10,xLabel:'time (s)'});
-    const fs=Number($('fs').value),lo=0.35,hi=Math.min(30,0.4*fs);
+    const fs=Number($('fs').value),lo=Math.max(0.02,3*fs/16384),hi=0.45*fs;
     const curves=[...sweepRows,...prbsRows];
     plot($('gainChart'),[
       {points:sweepRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#078b91',width:2.2},
@@ -259,6 +285,6 @@ function filter() {
   }
   window.addEventListener('resize',render);
   $('dtLabel').textContent='Tₛ = '+(1/Number($('fs').value)).toFixed(3)+' s';
-  newWorker();render();
+  updateSweepRangeLabel();newWorker();render();
   operation(async()=>{await compile();});
 })();
