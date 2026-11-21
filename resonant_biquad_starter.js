@@ -31,3 +31,11 @@ function filter() {
   memory.y1 = y;
   return y;
 }
+
+// Optional analytical transfer function (normalised biquad coefficients).
+function getTransferFunction() {
+  return {
+    b: [memory.b0, memory.b1, memory.b2],
+    a: [1, memory.a1, memory.a2]
+  };
+}

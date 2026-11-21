@@ -123,7 +123,37 @@
     });
     return {points,segments};
   }
-  const api = {randomGenerator,gaussianGenerator,generate,sineFit,metrics,fft,prbsFrequencyResponse};
+
+  // Evaluate a declared LTI transfer function H(z) = B(z^-1) / A(z^-1)
+  // directly on the unit circle, without executing filter() or synthesizing data.
+  function transferFunctionResponse(b,a,fs,frequencies) {
+    if(!Array.isArray(b)||!Array.isArray(a)||!b.length||!a.length||
+       b.length>128||a.length>128||
+       ![...b,...a].every(v=>typeof v==='number'&&Number.isFinite(v)) ||
+       Math.abs(a[0])<1e-14 || !b.some(v=>v!==0)) {
+      throw Error('getTransferFunction() needs finite numeric arrays b and a (1–128 coefficients each), nonzero a[0], and a nonzero numerator.');
+    }
+    function polynomial(c,angle) {
+      let re=0,im=0;
+      for(let k=0;k<c.length;k++) {
+        re+=c[k]*Math.cos(k*angle);
+        im-=c[k]*Math.sin(k*angle);
+      }
+      return {re,im};
+    }
+    return frequencies.map(f=>{
+      if(!(f>0&&f<fs/2))throw Error('Analytical frequency must be between 0 and Nyquist.');
+      const w=2*Math.PI*f/fs;
+      const num=polynomial(b,w),den=polynomial(a,w);
+      const numer=Math.hypot(num.re,num.im),denom=Math.hypot(den.re,den.im);
+      if(!Number.isFinite(denom)||denom<1e-12)throw Error('Analytical transfer function has a pole on/near the unit circle at '+f.toFixed(4)+' Hz.');
+      const amplitude=numer/denom;
+      const phase=Math.atan2(num.im,num.re)-Math.atan2(den.im,den.re);
+      const phaseDeg=Math.atan2(Math.sin(phase),Math.cos(phase))*180/Math.PI;
+      return {frequency:f,gainDb:20*Math.log10(Math.max(1e-12,amplitude)),phaseDeg,amplitude};
+    });
+  }
+  const api = {randomGenerator,gaussianGenerator,generate,sineFit,metrics,fft,prbsFrequencyResponse,transferFunctionResponse};
   root.SignalLab=api;
   if(typeof module!=='undefined' && module.exports) module.exports=api;
 })(typeof self!=='undefined'?self:globalThis);

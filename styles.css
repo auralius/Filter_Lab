@@ -5,3 +5,7 @@
 .response-legend{display:flex;flex-wrap:wrap;gap:18px;padding:11px 27px 0;font-size:11px;color:#5c7181}
 .sweep-actions .button.secondary{color:#614c9a;background:#f1eef9;border-color:#e1d7f0}
 @media(max-width:680px){.response-legend{padding:12px 17px 0;gap:10px}}
+
+/* v1.4: separate theoretical response from experimentally measured traces */
+.sweep-actions .button.analytic{color:#a54343;background:#fcf1ef;border-color:#ebd0cd}
+.sweep-actions .button.analytic:hover:not(:disabled){background:#f8e6e3}

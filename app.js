@@ -1,4 +1,4 @@
-/* Barefoot Filter Lab v1.3 — browser UI; filtering runs only in a Worker. */
+/* Barefoot Filter Lab v1.4 — browser UI; filtering runs only in a Worker. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -35,10 +35,20 @@ function filter() {
   memory.y2 = memory.y1;
   memory.y1 = y;
   return y;
+}
+
+// Optional analytical Bode plot for this linear, time-invariant filter.
+// These are the coefficients of H(z) = B(z^-1) / A(z^-1).
+// The playground evaluates them directly; filter() is NOT called.
+function getTransferFunction() {
+  return {
+    b: [1 / memory.A, 2 / memory.A, 1 / memory.A],
+    a: [1, memory.B / memory.A, memory.C / memory.A]
+  };
 }`;
   const ids=['frequency','amplitude','noiseStd','offset','fs','seed'];
   let codeEditor=$('codeEditor'), worker=null, requestId=0, pending=new Map();
-  let appliedCode='',dirty=true,busy=false,rows=[],sweepRows=[],prbsRows=[],configuration=null;
+  let appliedCode='',dirty=true,busy=false,rows=[],sweepRows=[],prbsRows=[],analyticalRows=[],configuration=null;
   const initialCode=localStorage.getItem(savedKey);
   codeEditor.value=initialCode===null?starterCode:initialCode;
   function refreshLines(){
@@ -67,7 +77,7 @@ function filter() {
   function newWorker(){
     if(worker)worker.terminate();
     for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Worker restarted.'));}pending.clear();
-    worker=new Worker('./worker.js?v=1.3.0');
+    worker=new Worker('./worker.js?v=1.4.0');
     worker.onmessage=evt=>{
       const {id,ok,result,error}=evt.data,p=pending.get(id);if(!p)return;
       clearTimeout(p.timer);pending.delete(id);
@@ -93,7 +103,7 @@ function filter() {
       try{worker.postMessage({id,action,...extra});}catch(e){clearTimeout(timer);pending.delete(id);reject(e);}
     });
   }
-  function disabled(v){busy=v;for(const id of ['runBtn','stepBtn','resetBtn','applyBtn','sweepBtn','prbsBtn','restoreBtn'])$(id).disabled=v;}
+  function disabled(v){busy=v;for(const id of ['runBtn','stepBtn','resetBtn','applyBtn','sweepBtn','prbsBtn','analyticalBtn','restoreBtn'])$(id).disabled=v;}
   async function operation(task){
     if(busy)return;
     disabled(true);
@@ -101,11 +111,11 @@ function filter() {
     finally{disabled(false);}
   }
   function clearResults(){
-    rows=[];sweepRows=[];prbsRows=[];$('exportSignalBtn').disabled=true;$('exportSweepBtn').disabled=true;
+    rows=[];sweepRows=[];prbsRows=[];analyticalRows=[];$('exportSignalBtn').disabled=true;$('exportSweepBtn').disabled=true;
     $('inRmse').textContent='—';$('outRmse').textContent='—';$('improvement').textContent='—';
     $('sampleCount').textContent='0 / '+Math.round(10*Number($('fs').value));
     $('plotMessage').textContent='Ready for ten seconds of data.';
-    $('sweepMessage').textContent='Run either method, or both, to compare responses.';
+    $('sweepMessage').textContent='Analytical H(z) evaluates declared coefficients; sine sweep and PRBS measure the actual filter() code.';
     render();
   }
   async function compile(){
@@ -116,6 +126,30 @@ function filter() {
     appliedCode=codeEditor.value;dirty=false;
     clearResults();status('Ready');
     message('Ready · init() called once. filter() awaits the first sample.');
+    // Auto-display the declared analytical curve, if provided. The optional
+    // callback runs in a separate fresh runtime and cannot alter session memory.
+    try { await computeAnalytical(false); }
+    catch(e) {
+      // An invalid OPTIONAL H(z) declaration must not prevent students from
+      // running their sample-by-sample filter or measured sweeps.
+      analyticalRows=[];
+      $('sweepMessage').textContent='Analytical H(z) unavailable: '+e.message+' The time-domain filter and measured sweeps remain usable.';
+      render();
+    }
+    return result;
+  }
+  async function computeAnalytical(showMessage=true) {
+    const result=await send('analytical',{config:configuration},6000);
+    analyticalRows=result.points||[];
+    if(showMessage){
+      $('sweepMessage').textContent=result.available
+        ? 'Analytical H(z): '+analyticalRows.length+' frequency points computed from declared coefficients, without running filter(). Compare measured curves to check your implementation.'
+        : 'No getTransferFunction() defined. Analytical curve is optional; sine sweep and PRBS still work.';
+    } else if(result.available){
+      $('sweepMessage').textContent='Analytical H(z) ready ('+analyticalRows.length+' points). Run sine sweep and PRBS to compare the actual filter.';
+    }
+    $('exportSweepBtn').disabled=!(sweepRows.length||prbsRows.length||analyticalRows.length);
+    render();
     return result;
   }
   function updateResults(res){
@@ -160,13 +194,19 @@ function filter() {
     if(result.row===null){message('All 10 seconds already processed. Reset to start again.');return;}
     updateResults(result);
   }));
+  $('analyticalBtn').addEventListener('click',()=>operation(async()=>{
+    if(dirty||!configuration)await compile();
+    status('Analytical H(z)…');
+    await computeAnalytical(true);
+    status('Ready');
+  }));
   $('sweepBtn').addEventListener('click',()=>operation(async()=>{
     if(dirty||!configuration)await compile();
     status('Sine sweep…');$('sweepMessage').textContent='Testing 60 logarithmically spaced frequencies…';
     const result=await send('sweep',{config:configuration},60000);
     sweepRows=result.points;
     $('exportSweepBtn').disabled=false;
-    $('sweepMessage').textContent='Sine sweep: 60 logarithmically spaced tones (4 warm-up + 5 fitted cycles). '+(prbsRows.length?'PRBS overlay also shown.':'Try PRBS to compare.');
+    $('sweepMessage').textContent='Sine sweep: 60 logarithmically spaced tones (4 warm-up + 5 fitted cycles). '+(prbsRows.length?'PRBS overlay also shown.':'Try PRBS to compare.')+(analyticalRows.length?' Analytical H(z) is shown.':'');
     status('Ready');render();
   }));
   $('prbsBtn').addEventListener('click',()=>operation(async()=>{
@@ -175,7 +215,7 @@ function filter() {
     const result=await send('prbs',{config:configuration},60000);
     prbsRows=result.points;
     $('exportSweepBtn').disabled=false;
-    $('sweepMessage').textContent='PRBS: 1 broadband test, 60 interpolated frequency estimates, '+result.segments+' averaged FFT windows; '+(sweepRows.length?'sine overlay also shown.':'run a sine sweep to compare.');
+    $('sweepMessage').textContent='PRBS: 1 broadband test, 60 interpolated frequency estimates, '+result.segments+' averaged FFT windows; '+(sweepRows.length?'sine overlay also shown.':'run a sine sweep to compare.')+(analyticalRows.length?' Analytical H(z) is shown.':'');
     status('Ready');render();
   }));
   $('restoreBtn').addEventListener('click',()=>{
@@ -196,9 +236,9 @@ function filter() {
     saveBlob('filter_signal.csv',csv.join('\n')+'\n','text/csv');
   });
   $('exportSweepBtn').addEventListener('click',()=>{
-    if(!sweepRows.length&&!prbsRows.length)return;
+    if(!sweepRows.length&&!prbsRows.length&&!analyticalRows.length)return;
     const csv=['method,frequency_hz,gain_db,phase_deg,amplitude'];
-    for(const [method,points] of [['sine',sweepRows],['prbs',prbsRows]]) {
+    for(const [method,points] of [['analytical',analyticalRows],['sine',sweepRows],['prbs',prbsRows]]) {
       for(const p of points)csv.push([method,p.frequency,p.gainDb,p.phaseDeg,p.amplitude].join(','));
     }
     saveBlob('filter_frequency_response.csv',csv.join('\n')+'\n','text/csv');
@@ -253,6 +293,7 @@ function filter() {
     for(const s of series){
       if(!s.points.length)continue;
       c.beginPath();c.lineWidth=s.width||1.7;c.strokeStyle=s.color;
+      c.setLineDash(s.dash||[]);
       let started=false;
       // For dense traces, subsample display only; exported CSV retains all data.
       const stride=Math.max(1,Math.floor(s.points.length/3000));
@@ -261,7 +302,7 @@ function filter() {
         const x=xx(p.x),y=yy(p.y);
         if(!started){c.moveTo(x,y);started=true;}else c.lineTo(x,y);
       }
-      c.stroke();
+      c.stroke();c.setLineDash([]);
     }
     c.restore();
   }
@@ -273,12 +314,14 @@ function filter() {
       {points:coord(rows),color:'#0ca39c',width:2.0}
     ],{xMin:0,xMax:10,xLabel:'time (s)'});
     const fs=Number($('fs').value),lo=Math.max(0.02,3*fs/16384),hi=0.45*fs;
-    const curves=[...sweepRows,...prbsRows];
+    const curves=[...analyticalRows,...sweepRows,...prbsRows];
     plot($('gainChart'),[
+      {points:analyticalRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#c45757',width:2.2,dash:[6,3]},
       {points:sweepRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#078b91',width:2.2},
       {points:prbsRows.map(r=>({x:r.frequency,y:r.gainDb})),color:'#7960b5',width:2.0}
     ],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:curves.length?Math.min(-3,...curves.map(x=>x.gainDb))-5:-40,yMax:curves.length?Math.max(3,...curves.map(x=>x.gainDb))+5:5});
     plot($('phaseChart'),[
+      {points:analyticalRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#c45757',width:2.2,dash:[6,3]},
       {points:sweepRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#e79931',width:2.2},
       {points:prbsRows.map(r=>({x:r.frequency,y:r.phaseDeg})),color:'#7960b5',width:2.0}
     ],{xMin:lo,xMax:hi,logX:true,xLabel:'frequency (Hz)',yMin:-180,yMax:180});

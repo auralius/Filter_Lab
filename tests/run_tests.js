@@ -5,7 +5,7 @@ function makeHarness(){
  const sent=[];
  const context={console,Math,Number,Object,Array,Date,Error,Set,Map,JSON,String,Boolean,Infinity,NaN};
  context.self=context;context.postMessage=function(msg){sent.push(msg);};
- context.importScripts=function(filename){vm.runInContext(fs.readFileSync(path.join(root,filename),'utf8'),sandbox,{filename});};
+ context.importScripts=function(filename){vm.runInContext(fs.readFileSync(path.join(root,filename.split('?')[0]),'utf8'),sandbox,{filename});};
  const sandbox=vm.createContext(context);
  vm.runInContext(fs.readFileSync(path.join(root,'worker.js'),'utf8'),sandbox,{filename:'worker.js'});
  let id=0;
@@ -102,3 +102,49 @@ for(const fsValue of [50,200,500]){
   ok('PRBS at '+fsValue+' Hz is finite and monotone low-pass',freqResult.ok&&freqResult.result.points.every(pt=>Number.isFinite(pt.gainDb)&&Number.isFinite(pt.phaseDeg))&&Math.max(...freqResult.result.points.map(pt=>pt.gainDb))<0.2);
 }
 console.log('\n'+count+' tests passed in total.');
+
+// v1.4: Optional direct frequency-response analysis from declared H(z).
+q=h.request('compile',{config:p,code:starter});
+let analytic=h.request('analytical',{config:p});
+ok('analytical curve is available with Butterworth starter',analytic.ok&&analytic.result.available);
+ok('analytical curve contains 240 points',analytic.result.points.length===240);
+ok('analytical frequency band matches measured band',Math.abs(analytic.result.points[0].frequency-passSweep.result.points[0].frequency)<1e-12&&Math.abs(analytic.result.points.at(-1).frequency-passSweep.result.points.at(-1).frequency)<1e-12);
+ok('analytical Butterworth no resonant peak',Math.max(...analytic.result.points.map(pt=>pt.gainDb))<0.05);
+function interp(points,f,key){
+ let i=1;while(i<points.length-1&&points[i].frequency<f)i++;
+ const a=points[i-1],b=points[i];
+ return a[key]+(b[key]-a[key])*(Math.log(f)-Math.log(a.frequency))/(Math.log(b.frequency)-Math.log(a.frequency));
+}
+function wrapDiff(a,b){return Math.abs(Math.atan2(Math.sin((a-b)*Math.PI/180),Math.cos((a-b)*Math.PI/180))*180/Math.PI);}
+const a5=interp(analytic.result.points,5,'gainDb');
+ok('5 Hz analytical cutoff near -3 dB',Math.abs(a5+3.08)<0.3);
+const errors=resonantSine.result.points.map(pt=>Math.abs(interp(analytic.result.points,pt.frequency,'gainDb')-pt.gainDb));
+ok('analytical and sine magnitude agree (<0.4 dB mean)',errors.reduce((a,b)=>a+b,0)/errors.length<0.4);
+const phaseErrors=resonantSine.result.points.map(pt=>wrapDiff(interp(analytic.result.points,pt.frequency,'phaseDeg'),pt.phaseDeg));
+ok('analytical and sine phase agree (<3 deg mean)',phaseErrors.reduce((a,b)=>a+b,0)/phaseErrors.length<3);
+q=h.request('compile',{config:p,code:'function filter(){return state.x;}'});
+analytic=h.request('analytical',{config:p});
+ok('optional H(z) callback may be omitted',analytic.ok&&analytic.result.available===false&&analytic.result.points.length===0);
+q=h.request('compile',{config:p,code:'function init(){ memory.n=0; } function getTransferFunction(){return {b:[1],a:[1]};} function filter(){memory.n++; return memory.n; }'});
+r=h.request('step');
+const aSeparate=h.request('analytical',{config:p});
+const stepAfterAnalytical=h.request('step');
+ok('getTransferFunction uses independent init/memory',r.ok&&r.result.row.y===1&&aSeparate.ok&&stepAfterAnalytical.ok&&stepAfterAnalytical.result.row.y===2);
+ok('scalar pass-through coefficients give 0 dB',aSeparate.result.points.every(pt=>Math.abs(pt.gainDb)<1e-12));
+q=h.request('compile',{config:p,code:'function filter(){return state.x;} function getTransferFunction(){return {b:[2,2],a:[2]};}'});
+analytic=h.request('analytical',{config:p});
+ok('non-unit a[0] is handled',analytic.ok&&Math.abs(interp(analytic.result.points,0.02,'gainDb')-6.0206)<.02);
+q=h.request('compile',{config:p,code:'function filter(){return state.x;} function getTransferFunction(){return {b:[1],a:[0]};}'});
+analytic=h.request('analytical',{config:p});
+ok('invalid denominator is rejected clearly',!analytic.ok&&analytic.error.includes('getTransferFunction()'));
+q=h.request('compile',{config:p,code:'function filter(){return state.x;} function getTransferFunction(){return {b:[1, Infinity],a:[1]};}'});
+analytic=h.request('analytical',{config:p});
+ok('non-finite coefficients rejected',!analytic.ok&&analytic.error.includes('finite numeric arrays'));
+q=h.request('compile',{config:p,code:'function filter(){return state.x;} function getTransferFunction(){return {b:[1,0],a:[1,-1]};}'});
+analytic=h.request('analytical',{config:p});
+ok('pole near DC is handled safely on finite sweep',analytic.ok&&analytic.result.points.every(pt=>Number.isFinite(pt.gainDb)));
+q=h.request('compile',{config:p,code:'function filter(){return state.x;} function getTransferFunction(){return {b:[0,1],a:[1]};}'});
+analytic=h.request('analytical',{config:p});
+ok('one-sample delay has flat 0 dB magnitude',analytic.ok&&analytic.result.points.every(pt=>Math.abs(pt.gainDb)<1e-10));
+ok('one-sample delay has expected negative phase',Math.abs(interp(analytic.result.points,10,'phaseDeg')+36)<.1);
+console.log('\n'+count+' tests passed including v1.4 analytical H(z).');

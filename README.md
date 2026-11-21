@@ -1,124 +1,85 @@
-# Filter Control Lab v1.3 — Virtual Lab Control Series
+# Barefoot Filter Lab v1.4 — SymPy/Tustin Butterworth LPF
 
-A lightweight, browser-only digital-filter playground. Students implement `init()` and `filter()` in JavaScript, one input sample at a time. The lab shows the 10-second noisy-sine experiment and compares **sine-by-sine frequency sweep** against a **single broadband PRBS / FFT measurement**. There is no npm build, library dependency, or server back end.
+A lightweight digital filter laboratory with a default starter taken directly from the **second-order LPF** derivation in [Digital Low-Pass Filter — Control Systems with SymPy](https://auralius.github.io/control-systems-with-sympy/digital-filter.html).
 
-## Run locally or on GitHub Pages
-
-From the unzipped folder:
+## Run
 
 ```bash
 python3 -m http.server 8000
 ```
 
-Open <http://localhost:8000/>. Do not use `file://` because Web Workers may be blocked. Publish the extracted files to GitHub Pages to serve the same page over HTTPS.
+Open <http://localhost:8000/>. The files also deploy unchanged to GitHub Pages. Avoid `file://` because browser Web Workers may be blocked.
 
-**The new default starter is an implemented second-order *resonant* low-pass**, not pass-through. The editor uses a new `localStorage` key in v1.1 to make the starter visible on first launch. If you've edited the filter already, **Reset starter** explicitly loads the shipped example.
+**New in v1.3:** The sine and PRBS frequency sweeps span a much broader logarithmic band with 60 measurements and decade gridlines. The SymPy/Tustin Butterworth starter from v1.2 remains available, as does the optional `resonant_biquad_starter.js`. Student editor code already saved in v1.2 is preserved; use **Reset starter** to restore the supplied default.
 
-## Student API: sample-by-sample and causal
+## New in v1.4: Analytical H(z) (no sweep needed)
 
-```js
-function init() {
-  memory.x1 = 0;
-  memory.y1 = 0;
-}
-function filter() {
-  const x = state.x;       // current input sample only
-  const y = /* implement filter equation here */ x;
-  memory.x1 = x;
-  memory.y1 = y;
-  return y;                // must be a finite scalar
+The optional `getTransferFunction()` standard callback declares `b` and `a` coefficients in powers of `z^-1`. A smooth analytical Bode response is calculated immediately on **Apply & reset**, if the callback exists, or by pressing **Analytical H(z)**. The result overlays the existing sine-sweep and PRBS frequency-response curves (dashed red analytical, teal sine, purple PRBS). Exported frequency-response CSV now includes a `method=analytical` series.
+
+```javascript
+function getTransferFunction() {
+  return {
+    b: [1 / memory.A, 2 / memory.A, 1 / memory.A],
+    a: [1, memory.B / memory.A, memory.C / memory.A]
+  };
 }
 ```
 
-| Name | Meaning |
-|---|---|
-| `state.x` | Current input only. No previous input, sample index, time, true sine, or future sample is exposed. |
-| `params.fs` | Sampling frequency in Hz |
-| `params.dt` | Sampling interval `1 / params.fs` in seconds |
-| `params.frequency`, `.amplitude`, `.noiseStd`, `.offset`, `.seed` | Signal-generator settings for experiments; **do not use the reference sine settings to cheat on filter evaluation** |
-| `memory` | Persistent, student-managed object; store earlier inputs/outputs and coefficient values yourself |
-| `init()` | Optional, executed once for each independent run, sine test frequency, or PRBS experiment |
-| `filter()` | Required, called once per input sample; must return a finite number |
+The callback runs in a **separate freshly initialized filter context**, so reading coefficients cannot modify the memory of ongoing time-domain or measured-sweep tests. It must return `{b:[...], a:[...]}`; `a[0]` can be any nonzero number (not necessarily one). Coefficients must be finite numbers, with up to 128 per array. Both arrays are interpreted as ascending powers of `z^-1`. The internal response engine normalizes naturally by evaluating the ratio `B/A` and displays 240 points from the current log-frequency limits to just below Nyquist.
 
-`state`, `params` and `memory` are available in custom functions without passing them as arguments. Both `state` and `params` are immutable snapshots. `memory` starts as `{}`, and `init()` can allocate arrays (`memory.history=[]`) and initialize previous values. **Past input samples cannot be read unless explicitly stored in `memory`.**
+This analytical response assumes a **linear time-invariant (LTI)** filter. It represents the **declared coefficients**; it cannot prove that the `filter()` implementation uses them correctly. For nonlinear or adaptive filters, omit the callback. Students' saved code from v1.2/v1.3 remains intact and may not contain the new callback: click **Reset starter** to load the version with `getTransferFunction()`.
 
-## New resonant biquad starter
+The sine sweep now uses **at least 100 warm-up and 100 measurement samples**, even at high frequency. This avoids misleading phase near Nyquist when a very short sequence has not settled.
+
+## Filter model and source correspondence
 
 The continuous-time prototype is
 
-$$
-H(s)=\frac{\omega_0^2}{s^2+2\zeta\omega_0s+\omega_0^2}, \quad \omega_0=2\pi f_0.
-$$
+\[H(s)=\frac{\omega_c^2}{s^2+\sqrt{2}\omega_c s+\omega_c^2}.\]
 
-The example sets **natural frequency** `f0 = 5 Hz` and damping ratio **`zeta = 0.30`**. Tustin's bilinear transform is used with frequency prewarping, `K = tan(pi * f0 / fs)`. Define `D = 1 + 2*zeta*K + K*K`:
+The notebook uses plain bilinear/Tustin substitution
 
-```text
-b0 = K*K/D          b1 = 2*b0                 b2 = b0
-a1 = 2*(K*K-1)/D    a2 = (1-2*zeta*K+K*K)/D
+\[s=\frac{2}{T_s}\frac{z-1}{z+1}.\]
 
-y[k] = b0*x[k] + b1*x[k-1] + b2*x[k-2]
-     - a1*y[k-1] - a2*y[k-2]
-```
+The derived sample equation is
 
-`init()` calculates coefficients once and initializes `x1,x2,y1,y2`. `filter()` updates these four samples **after** calculating `y[k]`.
+\[y[k]=\frac{x[k]+2x[k-1]+x[k-2]-B\,y[k-1]-C\,y[k-2]}{A},\]
 
-For a general second-order low-pass, a resonance peak exists if `0 < zeta < 1/sqrt(2)`. The default shows approximately **+4.85 dB around 4.5 Hz** at 100 Hz sampling. Setting `zeta = Math.SQRT1_2` produces a second-order Butterworth response **without** a resonance peak. Here `f0` is the **natural frequency**, not generally the -3 dB cutoff for resonant designs.
+where
 
-## 10-second noisy signal experiment
+\[
+A=1+\frac{2\sqrt2}{T_s\omega_c}+\frac{4}{(T_s\omega_c)^2},\quad
+B=2-\frac{8}{(T_s\omega_c)^2},\quad
+C=1-\frac{2\sqrt2}{T_s\omega_c}+\frac{4}{(T_s\omega_c)^2}.
+\]
 
-```text
-clean[k] = offset + amplitude * sin(2*pi*frequency*k/fs)
-x[k] = clean[k] + noiseStd * GaussianWhiteNoise[k]
-```
+**Units:** The notebook's wording labels `omega_c` as Hz, but angular frequency `omega_c` in these equations is in **rad/s**. The JavaScript therefore uses `wc = 2*Math.PI*fc` where `fc` is Hz. No prewarping is applied, exactly as in the notebook. Consequently, at `fs = 100 Hz` and requested `fc = 5 Hz`, the actual discrete -3 dB point is about 4.9595 Hz, not exactly 5 Hz. For a prewarped design the coefficient calculation would differ; that is not the implementation in this release.
 
-Click **Run 10 s**, or **Step 1 sample** to advance manually. The generator uses a deterministic noise seed. The amplitude/noise/offset controls affect this 10-second experiment, not the clean-sine or PRBS measurements.
+See `sympy_tustin_butterworth_lpf.js` for paste-ready code. At 100 Hz, the normalized IIR coefficients are approximately: `b0=0.01978958`, `b1=0.03957917`, `b2=0.01978958`, `a1=-1.56450399`, `a2=0.64366232`. The first implemented equation is kept in `A,B,C` form to match the notebook exactly.
 
-## Frequency-response measurement methods
+## Student API
 
-Both measurements use the **actual student `filter()`** at the selected sampling frequency and measure the output. They do **not** calculate the response from the coefficients. Gain/phase represent a transfer function only for approximately linear, time-invariant filters.
+`init()` runs once per independent time-domain, sine-test, or PRBS experiment. `filter()` runs once per input sample. The lab provides only the **current** `state.x`, plus global `params` and student-managed `memory`. Store history explicitly (e.g. `memory.x1`, `memory.x2`, `memory.y1`, `memory.y2`). `params.dt` is `1/params.fs`, so the coefficients automatically adapt to the selected sample rate.
 
-### Method A: sine sweep (22 tests)
+- **10-second signal:** noisy sine wave with configurable frequency, amplitude, offset, white-noise standard deviation and seed; RMSE compared to ideal sine; CSV export.
+- **Sine sweep:** 60 logarithmically spaced frequencies, spanning max(0.02 Hz, 3 fs / 16384) to 0.45 fs (e.g. approximately 0.02–45 Hz at fs = 100 Hz); for each, discard 4 periods and measure 5 periods using sine fitting, with a fresh `init()` per frequency.
+- **PRBS/FFT:** seeded ±1 broadband input, 8192 warm-up samples and 131072 recorded samples, H1 frequency-response estimate from averaged 16384-point Hann-windowed FFT segments; fresh `init()` for the experiment. PRBS does not expose future/past input samples to the student's code. The complex frequency response is interpolated between FFT bins to match the sine sweep grid; extreme low-frequency points are limited by FFT resolution.
 
-- 22 logarithmically spaced frequencies from **0.35 Hz** to `min(30 Hz, 0.4*fs)`.
-- Each frequency has a fresh `memory` and `init()`.
-- Generate a clean unit-amplitude sine; discard four periods, measure five periods.
-- Fit `y(t) ≈ c + a*sin(2πft) + b*cos(2πft)` by least squares.
-- Gain: `20*log10(sqrt(a*a+b*b))`; phase: `atan2(b,a)` degrees.
+The two measured methods plot gain and phase alongside an optional analytical Bode curve. Both the Butterworth and resonant starter examples now provide `getTransferFunction()`. A Butterworth response should have a flat passband **without a resonance peak**. Use `resonant_biquad_starter.js` to demonstrate a peak with damping ratio 0.30.
 
-### Method B: PRBS / FFT (one broadband test)
+## Teaching prompts
 
-- Generate one deterministic **pseudo-random binary sequence** (PRBS), taking values **-1** and **+1**. It is broadband, so many frequencies are excited *at the same time*.
-- Call `init()` **once** for the experiment, discard **4,096 samples** as warm-up, then record **32,768 input/output pairs**. The experiment is longer than the 10-second noisy-sine test.
-- Use **4,096-point Hann-windowed FFTs**, **50% overlap**, and average **15 cross-/auto-spectral estimates** (the H1 estimator):
+1. Explain the difference between a continuous-time cutoff in rad/s and a frequency in Hz.
+2. Trace `x1`, `x2`, `y1`, `y2` for the first three samples.
+3. Compare `fs = 50, 100, 200 Hz` while holding `fc = 5 Hz`.
+4. Run both sine sweep and PRBS; explain why their estimates approximately agree.
+5. Compare the Butterworth starter with `resonant_biquad_starter.js`: change damping and observe the resonant peak.
+6. Explore how Tustin frequency warping changes the nominal cutoff when `fc/fs` becomes large.
 
+All signal processing and student filter execution is browser-only and does not need npm or a server back end. This is an educational playground, not a hardened sandbox for untrusted code.
 
-```math
-\hat{H}(f) =
-\frac{\sum_{m} Y_{m}(f) X_{m}^{\ast}(f)}
-{\sum_{m} X_{m}(f) X_{m}^{\ast}(f)}
-```
+## Wider Bode frequency axis (v1.3)
 
+Both frequency-response charts use a **true logarithmic x-axis**, with labeled decades and minor ticks at 2 and 5 times each decade. The sine sweep and PRBS now share **60 logarithmic frequencies** from `max(0.02, 3*fs/16384)` to `0.45*fs`. At 100 Hz this is about **0.02–45 Hz** (more than three decades); at 500 Hz, about **0.092–225 Hz**. Nyquist remains `fs/2`, which we stay below.
 
-- Convert the complex ratio to gain (`20 log10 |H|`) and phase (`arg H`, wrapped to ±180°). Plot nearest FFT bins to the same 22 requested frequencies as the sine sweep.
-- Repeating a test with the same seed produces the same PRBS and response. PRBS has **no** sine frequency: during that test, `params.frequency = 0`. The filter must not depend on knowing the input's clean sine.
-
-**Tradeoff:** A sine sweep gives accurate individual tone measurements but uses many independent experiments. PRBS measures a broadband response in one run, with spectral averaging; its curve may exhibit some measurement variability or smoothing, particularly for sharp resonances. Compare both results on the overlaid plots (teal/orange for sine; violet for PRBS).
-
-## CSV exports
-
-- **Export CSV**: the ten-second time-domain data, including `input_x`, `ideal_sine`, `output_y`, and generator settings.
-- **Export response CSV**: every available frequency-response measurement. New format: `method,frequency_hz,gain_db,phase_deg,amplitude`, with `method` equal to `sine` or `prbs`. If both tests are run, both sets appear in one file.
-- **Save .js**: current student filter code. Edits are saved only in the browser; no automatic GitHub submission.
-
-## Experiments
-
-1. Run the default `zeta=0.30` starter. Compare the **+4–5 dB resonance** obtained by the sine sweep and PRBS.
-2. Change `zeta` to `Math.SQRT1_2` (approximately 0.707). The resonant peak should disappear: this is the **Butterworth** case.
-3. Try `zeta=0.1`, then `zeta=1.0`. Discuss resonance versus damping, settling time and how many frequencies are sufficient to locate a narrow peak.
-4. Change `f0`, `params.fs`, or the noisy-sine input frequency. Discuss prewarping, Nyquist, and why the time-domain RMSE against the *undelayed* sine can rise even if high-frequency noise is attenuated.
-
-## Notes and validation
-
-Run `node tests/run_tests.js` for numeric Worker checks. The student code executes inside a Web Worker, not a hardened sandbox; use trusted classroom code. The Worker timeout interrupts code that does not return, but no guarantee of safe hostile-code execution is provided.
-
-MIT licensed; see `LICENSE`.
+Very low frequencies require more simulation samples for nine sine cycles, and PRBS requires a longer FFT to resolve the lowest bins. The wider tests therefore take longer than in v1.2 but still run entirely in a Web Worker; the ten-second noisy-sine experiment remains unchanged. PRBS has frequency-resolution limits and near-Nyquist estimates may be noisy for aggressive filters. For causal filters, all history is still student-managed.

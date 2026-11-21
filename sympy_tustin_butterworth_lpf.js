@@ -31,3 +31,11 @@ function filter() {
   memory.y1 = y;
   return y;
 }
+
+// Optional theoretical Bode plot using the exact same coefficients.
+function getTransferFunction() {
+  return {
+    b: [1 / memory.A, 2 / memory.A, 1 / memory.A],
+    a: [1, memory.B / memory.A, memory.C / memory.A]
+  };
+}

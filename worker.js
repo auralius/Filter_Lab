@@ -1,5 +1,5 @@
 'use strict';
-importScripts('./signal.js');
+importScripts('./signal.js?v=1.4.0');
 let codeText = '';
 let session = null;
 const defaultConfig={fs:100,duration:10,frequency:2,amplitude:1,noiseStd:0.45,offset:0,seed:17};
@@ -16,7 +16,8 @@ function createFilter(source,params) {
   const body='"use strict";\nlet state, params, memory;\n'+source+'\n'+
     'return { bind(s,p,m){state=s;params=p;memory=m;},'+
     'init:(typeof init === "function" ? init : null),'+
-    'filter:(typeof filter === "function" ? filter : null) };';
+    'filter:(typeof filter === "function" ? filter : null),'+
+    'getTransferFunction:(typeof getTransferFunction === "function" ? getTransferFunction : null) };';
   let instance;
   try{instance=new Function(body)();}catch(e){throw Error('Compile error: '+e.message);}
   if(typeof instance.filter!=='function')throw Error('Define a function named filter() that returns one finite number.');
@@ -24,6 +25,14 @@ function createFilter(source,params) {
   instance.bind(Object.freeze({x:0}),params,memory);
   try{if(instance.init)instance.init();}catch(e){throw Error('init() error: '+e.message);}
   return {
+    coefficients(){
+      if(!instance.getTransferFunction)return null;
+      let declared;
+      try{declared=instance.getTransferFunction();}
+      catch(e){throw Error('getTransferFunction() error: '+e.message);}
+      if(!declared||typeof declared!=='object')throw Error('getTransferFunction() must return { b: [...], a: [...] }.');
+      return {b:declared.b,a:declared.a};
+    },
     process(x){
       // Only the current sample is provided; no clean value, future samples, or time index.
       instance.bind(Object.freeze({x}),params,memory);
@@ -66,8 +75,10 @@ function sweep(cfg){
     const p=Object.freeze({...cfgBase,frequency,amplitude:1,offset:0,noiseStd:0});
     const runtime=createFilter(codeText,p);
     const fs=p.fs,cyclesWarm=4,cyclesMeasure=5;
-    let warmN=Math.ceil(cyclesWarm*fs/frequency),
-        measureN=Math.ceil(cyclesMeasure*fs/frequency);
+    // At high frequencies, a handful of cycles is too short to reject
+    // startup transients or fit phase reliably near Nyquist.
+    let warmN=Math.max(100,Math.ceil(cyclesWarm*fs/frequency)),
+        measureN=Math.max(100,Math.ceil(cyclesMeasure*fs/frequency));
     if(warmN+measureN>150000)throw Error('Frequency sweep simulation length exceeded limit.');
     const output=[];
     for(let k=0;k<warmN+measureN;k++){
@@ -81,6 +92,19 @@ function sweep(cfg){
     result.push({frequency,gainDb:20*Math.log10(Math.max(1e-12,fit.amplitude)),phaseDeg:fit.phase,amplitude:fit.amplitude});
   }
   return result;
+}
+// Coefficient-only response: a fresh init(), no filter() calls, no effects on
+// the currently running time-domain experiment or either measured method.
+const ANALYTICAL_POINTS=240;
+function analytical(cfg){
+  if(!codeText)throw Error('Press Apply & reset first');
+  const p=validate(cfg),runtime=createFilter(codeText,p);
+  const tf=runtime.coefficients();
+  if(!tf)return {available:false,points:[]};
+  const {lo,hi}=sweepLimits(p.fs);
+  const frequencies=Array.from({length:ANALYTICAL_POINTS},(_,i)=>lo*Math.pow(hi/lo,i/(ANALYTICAL_POINTS-1)));
+  const points=SignalLab.transferFunctionResponse(tf.b,tf.a,p.fs,frequencies);
+  return {available:true,points,orderNumerator:tf.b.length-1,orderDenominator:tf.a.length-1};
 }
 // Broadband PRBS experiment: same causal filter(), once per sample.
 // 8192 warm-up samples are ignored; then 131072 samples are analyzed via
@@ -116,6 +140,8 @@ self.onmessage=function(evt){
       if(!session)throw Error('Press Apply & reset first');
       while(session.index<session.input.length)next(session);
       result={rows:session.rows.slice(),done:true,metrics:SignalLab.metrics(session.rows)};
+    }else if(action==='analytical'){
+      result=analytical(config);
     }else if(action==='prbs'){
       if(!codeText)throw Error('Press Apply & reset first');
       result=prbs(config);
