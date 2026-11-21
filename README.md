@@ -1,8 +1,4 @@
-# Filter Control Lab v1.1 — Virtual Lab Control Series
-
-__URL: https://auralius.github.io/Filter_Lab/__
-
----
+# Filter Control Lab v1.3 — Virtual Lab Control Series
 
 A lightweight, browser-only digital-filter playground. Students implement `init()` and `filter()` in JavaScript, one input sample at a time. The lab shows the 10-second noisy-sine experiment and compares **sine-by-sine frequency sweep** against a **single broadband PRBS / FFT measurement**. There is no npm build, library dependency, or server back end.
 
@@ -95,9 +91,13 @@ Both measurements use the **actual student `filter()`** at the selected sampling
 - Call `init()` **once** for the experiment, discard **4,096 samples** as warm-up, then record **32,768 input/output pairs**. The experiment is longer than the 10-second noisy-sine test.
 - Use **4,096-point Hann-windowed FFTs**, **50% overlap**, and average **15 cross-/auto-spectral estimates** (the H1 estimator):
 
-  $$
-  \hat{H}(f)=\frac{\sum_m Y_m(f)X_m^*(f)}{\sum_m X_m(f)X_m^*(f)}.
-  $$
+
+```math
+\hat{H}(f) =
+\frac{\sum_{m} Y_{m}(f) X_{m}^{\ast}(f)}
+{\sum_{m} X_{m}(f) X_{m}^{\ast}(f)}
+```
+
 
 - Convert the complex ratio to gain (`20 log10 |H|`) and phase (`arg H`, wrapped to ±180°). Plot nearest FFT bins to the same 22 requested frequencies as the sine sweep.
 - Repeating a test with the same seed produces the same PRBS and response. PRBS has **no** sine frequency: during that test, `params.frequency = 0`. The filter must not depend on knowing the input's clean sine.
